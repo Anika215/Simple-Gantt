@@ -34,11 +34,35 @@ function formatDate(str) {
 }
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
+function taskRangeView(tasks) {
+  if (!tasks.length) {
+    const now = new Date();
+    return {
+      start: new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0],
+      end:   new Date(now.getFullYear(), now.getMonth() + 3, 0).toISOString().split("T")[0],
+    };
+  }
+  const sorted = [...tasks].map(t => t.start).sort();
+  const sortedE = [...tasks].map(t => t.end).sort();
+  const s = new Date(sorted[0] + "T00:00:00");
+  const e = new Date(sortedE[sortedE.length - 1] + "T00:00:00");
+  return {
+    start: new Date(s.getFullYear(), s.getMonth(), 1).toISOString().split("T")[0],
+    end:   new Date(e.getFullYear(), e.getMonth() + 1, 0).toISOString().split("T")[0],
+  };
+}
+
+function todayStr() { return new Date().toISOString().split("T")[0]; }
+function todayPlusMonthStr() {
+  const d = new Date();
+  return new Date(d.getFullYear(), d.getMonth() + 1, d.getDate()).toISOString().split("T")[0];
+}
+
 export default function GanttTool() {
   const [tasks,      setTasks]      = useState(DEFAULT_TASKS);
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
-  const [viewStart,  setViewStart]  = useState("2026-03-01");
-  const [viewEnd,    setViewEnd]    = useState("2026-05-31");
+  const [viewStart,  setViewStart]  = useState(() => taskRangeView(DEFAULT_TASKS).start);
+  const [viewEnd,    setViewEnd]    = useState(() => taskRangeView(DEFAULT_TASKS).end);
   const [showAddTask, setShowAddTask] = useState(false);
   const [showAddCat,  setShowAddCat]  = useState(false);
   const [editingTask, setEditingTask] = useState(null);
@@ -80,7 +104,7 @@ export default function GanttTool() {
 
   const [newTask, setNewTask] = useState({
     name: "", categoryId: DEFAULT_CATEGORIES[0].id,
-    start: "2026-03-01", end: "2026-03-15",
+    start: todayStr(), end: todayPlusMonthStr(),
     status: "on-track", milestone: false,
   });
   const [newCat, setNewCat] = useState({ name: "", colorIdx: 0 });
@@ -133,7 +157,7 @@ export default function GanttTool() {
     if (!newTask.name.trim()) return;
     setTasks(t => [...t, { ...newTask, id: nextId }]);
     setNextId(n => n + 1);
-    setNewTask({ name: "", categoryId: categories[0]?.id || "", start: "2026-03-01", end: "2026-03-15", status: "on-track", milestone: false });
+    setNewTask({ name: "", categoryId: categories[0]?.id || "", start: todayStr(), end: todayPlusMonthStr(), status: "on-track", milestone: false });
     setShowAddTask(false);
   }
   function addCategory() {
@@ -148,6 +172,7 @@ export default function GanttTool() {
   function saveEditTask()     { setTasks(t => t.map(x => x.id === editingTask.id ? editingTask : x)); setEditingTask(null); }
   function saveEditCat()      { setCategories(c => c.map(x => x.id === editingCat.id ? editingCat : x)); setEditingCat(null); }
   function toggleStatus(id)   { setTasks(t => t.map(x => x.id === id ? { ...x, status: x.status === "on-track" ? "delayed" : "on-track" } : x)); }
+  function fitView()          { const r = taskRangeView(tasks); setViewStart(r.start); setViewEnd(r.end); }
 
   // ── today marker ───────────────────────────────────────────────────────────
   const today        = new Date().toISOString().split("T")[0];
@@ -202,6 +227,7 @@ export default function GanttTool() {
               {saveStatus === "error"  && "✕ Save failed"}
             </span>
           )}
+          <Btn ghost onClick={fitView}>Fit</Btn>
           <Btn ghost onClick={() => setShowAddCat(true)}>⊕ Category</Btn>
           <Btn primary onClick={() => setShowAddTask(true)}>+ Add Task</Btn>
         </div>

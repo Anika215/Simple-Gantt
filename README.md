@@ -2,6 +2,8 @@
 
 A lightweight, browser-based Gantt chart tool built with React. No backend required — everything runs in the browser and persists to localStorage.
 
+Built for people who just want to lay out a timeline quickly. No accounts, no onboarding flows, no dragging bars around hoping they snap to the right date.
+
 ## Features
 
 - Add and manage tasks with start/end dates
