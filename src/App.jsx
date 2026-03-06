@@ -70,6 +70,7 @@ export default function GanttTool() {
   const [nextId, setNextId] = useState(100);
   const [loaded, setLoaded] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null); // "saving" | "saved" | "error"
+  const [pxPerDay, setPxPerDay] = useState(8);
 
   // ── Load from localStorage on mount ─────────────────────────────────────
   useEffect(() => {
@@ -182,6 +183,7 @@ export default function GanttTool() {
 
   const months = getMonths();
   const LABEL_W = 220; // px — left label column
+  const chartW  = totalDays * pxPerDay; // px — scrollable chart area
 
   // ── week tick marks ────────────────────────────────────────────────────────
   function getWeekTicks() {
@@ -228,6 +230,15 @@ export default function GanttTool() {
             </span>
           )}
           <Btn ghost onClick={fitView}>Fit</Btn>
+          <div style={{ display: "flex", alignItems: "center", gap: 0, border: "1px solid #e5e7eb", borderRadius: 8, overflow: "hidden" }}>
+            <button onClick={() => setPxPerDay(p => Math.max(2, Math.round(p / 1.4)))}
+              title="Zoom out"
+              style={{ border: "none", borderRight: "1px solid #e5e7eb", background: "#fff", color: "#374151", fontSize: 15, cursor: "pointer", padding: "6px 12px", lineHeight: 1, fontWeight: 600 }}>−</button>
+            <span style={{ fontSize: 11, fontFamily: "'DM Mono',monospace", color: "#6b7280", padding: "0 8px", userSelect: "none" }}>{pxPerDay}px/d</span>
+            <button onClick={() => setPxPerDay(p => Math.min(60, Math.round(p * 1.4)))}
+              title="Zoom in"
+              style={{ border: "none", borderLeft: "1px solid #e5e7eb", background: "#fff", color: "#374151", fontSize: 15, cursor: "pointer", padding: "6px 12px", lineHeight: 1, fontWeight: 600 }}>+</button>
+          </div>
           <Btn ghost onClick={() => setShowAddCat(true)}>⊕ Category</Btn>
           <Btn primary onClick={() => setShowAddTask(true)}>+ Add Task</Btn>
         </div>
@@ -260,16 +271,16 @@ export default function GanttTool() {
 
       {/* ── Gantt body ───────────────────────────────────────────────────── */}
       <div style={{ flex: 1, overflowX: "auto", overflowY: "auto", padding: "20px 24px 32px" }}>
-        {/* We use a table-like layout: fixed left column + flexible right area */}
-        <div style={{ display: "flex", flexDirection: "column", minWidth: 700 }}>
+        {/* We use a table-like layout: fixed left column + fixed-pixel right area */}
+        <div style={{ display: "flex", flexDirection: "column", width: LABEL_W + chartW }}>
 
           {/* Month header */}
           <div style={{ display: "flex", marginBottom: 0 }}>
-            <div style={{ width: LABEL_W, flexShrink: 0 }} />
-            <div style={{ flex: 1, display: "flex", minWidth: 0 }}>
+            <div style={{ width: LABEL_W, flexShrink: 0, position: "sticky", left: 0, zIndex: 10, background: "#f9fafb" }} />
+            <div style={{ width: chartW, flexShrink: 0, display: "flex" }}>
               {months.map((m, i) => (
                 <div key={i} style={{
-                  flexBasis: `${(m.days / totalDays) * 100}%`,
+                  width: (m.days / totalDays) * chartW,
                   flexShrink: 0,
                   borderLeft: i > 0 ? "2px solid #e5e7eb" : "none",
                   padding: "4px 8px",
@@ -287,8 +298,8 @@ export default function GanttTool() {
 
           {/* Week ticks */}
           <div style={{ display: "flex", marginBottom: 12, borderBottom: "2px solid #e5e7eb" }}>
-            <div style={{ width: LABEL_W, flexShrink: 0 }} />
-            <div style={{ flex: 1, position: "relative", height: 22, minWidth: 0 }}>
+            <div style={{ width: LABEL_W, flexShrink: 0, position: "sticky", left: 0, zIndex: 10, background: "#f9fafb" }} />
+            <div style={{ width: chartW, flexShrink: 0, position: "relative", height: 22 }}>
               {getWeekTicks().map((t, i) => (
                 <div key={i} style={{
                   position: "absolute", left: `${t.pct}%`,
@@ -311,17 +322,17 @@ export default function GanttTool() {
               <div key={cat.id} style={{ marginBottom: 6 }}>
                 {/* Category row */}
                 <div style={{ display: "flex", alignItems: "center", marginBottom: 4 }}>
-                  <div style={{ width: LABEL_W, flexShrink: 0, display: "flex", alignItems: "center", gap: 6 }}>
+                  <div style={{ width: LABEL_W, flexShrink: 0, display: "flex", alignItems: "center", gap: 6, position: "sticky", left: 0, zIndex: 10, background: "#f9fafb" }}>
                     <div style={{ width: 3, height: 14, borderRadius: 2, background: color.bar, flexShrink: 0 }} />
                     <span style={{ fontSize: 10, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.1em" }}>{cat.name}</span>
                   </div>
-                  <div style={{ flex: 1, height: 1, background: "#f0f0f0", minWidth: 0 }} />
+                  <div style={{ width: chartW, flexShrink: 0, height: 1, background: "#f0f0f0" }} />
                 </div>
 
                 {catTasks.length === 0 && (
                   <div style={{ display: "flex", height: 36 }}>
-                    <div style={{ width: LABEL_W, flexShrink: 0 }} />
-                    <div style={{ flex: 1, display: "flex", alignItems: "center", paddingLeft: 8 }}>
+                    <div style={{ width: LABEL_W, flexShrink: 0, position: "sticky", left: 0, zIndex: 10, background: "#f9fafb" }} />
+                    <div style={{ width: chartW, flexShrink: 0, display: "flex", alignItems: "center", paddingLeft: 8 }}>
                       <span style={{ fontSize: 11, color: "#d1d5db", fontStyle: "italic" }}>No tasks — click + Add Task</span>
                     </div>
                   </div>
@@ -340,7 +351,7 @@ export default function GanttTool() {
                       onMouseLeave={e => e.currentTarget.querySelector(".task-actions").style.opacity = "0"}>
 
                       {/* Left label */}
-                      <div style={{ width: LABEL_W, flexShrink: 0, paddingRight: 10, display: "flex", alignItems: "center", gap: 4 }}>
+                      <div style={{ width: LABEL_W, flexShrink: 0, paddingRight: 10, display: "flex", alignItems: "center", gap: 4, position: "sticky", left: 0, zIndex: 10, background: "#f9fafb" }}>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: 12, fontWeight: 500, color: "#1f2937", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{task.name}</div>
                           <div style={{ fontSize: 10, color: "#9ca3af", fontFamily: "'DM Mono',monospace", marginTop: 1 }}>
@@ -358,7 +369,7 @@ export default function GanttTool() {
                       </div>
 
                       {/* Bar track */}
-                      <div style={{ flex: 1, position: "relative", height: 44, minWidth: 0 }}>
+                      <div style={{ width: chartW, flexShrink: 0, position: "relative", height: 44 }}>
                         {/* subtle month dividers */}
                         {months.slice(1).map((m, i) => (
                           <div key={i} style={{ position: "absolute", left: `${(m.offset / totalDays) * 100}%`, top: 0, bottom: 0, width: 1, background: "#f0f0f0", pointerEvents: "none" }} />
@@ -417,8 +428,8 @@ export default function GanttTool() {
           {/* Today label */}
           {showToday && (
             <div style={{ display: "flex", marginTop: 4 }}>
-              <div style={{ width: LABEL_W, flexShrink: 0 }} />
-              <div style={{ flex: 1, position: "relative", height: 18 }}>
+              <div style={{ width: LABEL_W, flexShrink: 0, position: "sticky", left: 0, zIndex: 10, background: "#f9fafb" }} />
+              <div style={{ width: chartW, flexShrink: 0, position: "relative", height: 18 }}>
                 <div style={{ position: "absolute", left: `${todayLeftPct}%`, transform: "translateX(-50%)", fontSize: 10, color: "#f59e0b", fontFamily: "'DM Mono',monospace", fontWeight: 600, whiteSpace: "nowrap" }}>
                   ▲ Today
                 </div>
