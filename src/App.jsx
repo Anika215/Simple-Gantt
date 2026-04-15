@@ -227,7 +227,7 @@ export default function GanttTool() {
       `}</style>
 
       {/* ── Top bar ──────────────────────────────────────────────────────── */}
-      <div style={{ background: "#fff", borderBottom: "1px solid #e5e7eb", padding: "16px 28px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+      <div style={{ background: "#fff", borderBottom: "1px solid #e5e7eb", padding: "10px 28px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
         <div>
           <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 12, color: "#9ca3af", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 2 }}>Project</div>
           <h1 style={{ fontSize: 21, fontWeight: 700, color: "#111827", margin: 0 }}>Project Timeline</h1>
@@ -257,7 +257,7 @@ export default function GanttTool() {
       </div>
 
       {/* ── Legend bar ───────────────────────────────────────────────────── */}
-      <div style={{ background: "#fff", borderBottom: "1px solid #f3f4f6", padding: "10px 28px", display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+      <div style={{ background: "#fff", borderBottom: "1px solid #f3f4f6", padding: "6px 28px", display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
         {categories.map(cat => {
           const color = COLORS[cat.colorIdx % COLORS.length];
           return (
@@ -282,20 +282,20 @@ export default function GanttTool() {
       </div>
 
       {/* ── Gantt body ───────────────────────────────────────────────────── */}
-      <div style={{ flex: 1, overflowX: "auto", overflowY: "auto", padding: "20px 24px 32px" }}>
+      <div style={{ flex: 1, overflowX: "auto", overflowY: "auto", padding: "12px 24px 20px" }}>
         {/* We use a table-like layout: fixed left column + fixed-pixel right area */}
         <div style={{ display: "flex", flexDirection: "column", width: LABEL_W + chartW }}>
 
           {/* Month header */}
           <div style={{ display: "flex", marginBottom: 0 }}>
-            <div style={{ width: LABEL_W, flexShrink: 0, position: "sticky", left: 0, zIndex: 10, background: "#f9fafb" }} />
+            <div style={{ width: LABEL_W, flexShrink: 0, position: "sticky", left: 0, zIndex: 20, background: "#f9fafb" }} />
             <div style={{ width: chartW, flexShrink: 0, display: "flex" }}>
               {months.map((m, i) => (
                 <div key={i} style={{
                   width: (m.days / totalDays) * chartW,
                   flexShrink: 0,
                   borderLeft: i > 0 ? "2px solid #e5e7eb" : "none",
-                  padding: "5px 10px",
+                  padding: "3px 10px",
                   fontSize: 12, fontWeight: 700, color: "#374151",
                   background: "#f3f4f6",
                   fontFamily: "'DM Mono',monospace",
@@ -309,9 +309,9 @@ export default function GanttTool() {
           </div>
 
           {/* Week ticks */}
-          <div style={{ display: "flex", marginBottom: 14, borderBottom: "2px solid #e5e7eb" }}>
-            <div style={{ width: LABEL_W, flexShrink: 0, position: "sticky", left: 0, zIndex: 10, background: "#f9fafb" }} />
-            <div style={{ width: chartW, flexShrink: 0, position: "relative", height: 26 }}>
+          <div style={{ display: "flex", marginBottom: 8, borderBottom: "2px solid #e5e7eb" }}>
+            <div style={{ width: LABEL_W, flexShrink: 0, position: "sticky", left: 0, zIndex: 20, background: "#f9fafb" }} />
+            <div style={{ width: chartW, flexShrink: 0, position: "relative", height: 20 }}>
               {getWeekTicks().map((t, i) => (
                 <div key={i} style={{
                   position: "absolute", left: `${t.pct}%`,
@@ -331,19 +331,25 @@ export default function GanttTool() {
             const catTasks = tasks.filter(t => t.categoryId === cat.id);
 
             return (
-              <div key={cat.id} style={{ marginBottom: 8 }}>
-                {/* Category row */}
-                <div style={{ display: "flex", alignItems: "center", marginBottom: 4 }}>
-                  <div style={{ width: LABEL_W, flexShrink: 0, display: "flex", alignItems: "center", gap: 6, position: "sticky", left: 0, zIndex: 10, background: "#f9fafb" }}>
-                    <div style={{ width: 4, height: 16, borderRadius: 2, background: color.bar, flexShrink: 0 }} />
-                    <span style={{ fontSize: 12, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.1em" }}>{cat.name}</span>
+              <div key={cat.id} style={{ display: "flex", marginBottom: 6 }}>
+
+                {/* Tall phase label — spans all task rows */}
+                <div style={{ width: LABEL_W, flexShrink: 0, position: "sticky", left: 0, zIndex: 20, background: "#f9fafb", display: "flex", alignItems: "center", justifyContent: "center", padding: "4px 8px" }}>
+                  <div style={{
+                    width: "100%", borderRadius: 10,
+                    background: color.light,
+                    border: `1px solid ${color.border}`,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    minHeight: catTasks.length === 0 ? 40 : catTasks.length * 46,
+                  }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: color.text, textTransform: "uppercase", letterSpacing: "0.08em", textAlign: "center", wordBreak: "break-word", padding: "0 8px" }}>{cat.name}</span>
                   </div>
-                  <div style={{ width: chartW, flexShrink: 0, height: 1, background: "#f0f0f0" }} />
                 </div>
 
+                {/* Task rows */}
+                <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", justifyContent: "center" }}>
                 {catTasks.length === 0 && (
-                  <div style={{ display: "flex", height: 44 }}>
-                    <div style={{ width: LABEL_W, flexShrink: 0, position: "sticky", left: 0, zIndex: 10, background: "#f9fafb" }} />
+                  <div style={{ display: "flex", height: 52 }}>
                     <div style={{ width: chartW, flexShrink: 0, display: "flex", alignItems: "center", paddingLeft: 8 }}>
                       <span style={{ fontSize: 13, color: "#d1d5db", fontStyle: "italic" }}>No tasks — click + Add Task</span>
                     </div>
@@ -358,30 +364,12 @@ export default function GanttTool() {
                   const barText   = delayed ? "#991b1b" : color.text;
 
                   return (
-                    <div key={task.id} style={{ display: "flex", alignItems: "center", marginBottom: 6, minHeight: 52 }}
+                    <div key={task.id} style={{ display: "flex", alignItems: "center", marginBottom: 4, minHeight: 40 }}
                       onMouseEnter={e => e.currentTarget.querySelector(".task-actions").style.opacity = "1"}
                       onMouseLeave={e => e.currentTarget.querySelector(".task-actions").style.opacity = "0"}>
 
-                      {/* Left label */}
-                      <div style={{ width: LABEL_W, flexShrink: 0, paddingRight: 10, display: "flex", alignItems: "center", gap: 4, position: "sticky", left: 0, zIndex: 10, background: "#f9fafb" }}>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 14, fontWeight: 500, color: "#1f2937", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{task.name}</div>
-                          <div style={{ fontSize: 12, color: "#9ca3af", fontFamily: "'DM Mono',monospace", marginTop: 1 }}>
-                            {formatDate(task.start)} — {formatDate(task.end)}
-                          </div>
-                        </div>
-                        <div className="task-actions" style={{ opacity: 0, transition: "opacity 0.15s", display: "flex", gap: 2, flexShrink: 0 }}>
-                          <button onClick={() => setEditingTask({ ...task })} title="Edit" style={iconBtn}>✎</button>
-                          <button onClick={() => toggleStatus(task.id)} title="Toggle status"
-                            style={{ ...iconBtn, background: delayed ? "#fee2e2" : "#d1fae5", color: delayed ? "#991b1b" : "#065f46" }}>
-                            {delayed ? "⚠" : "✓"}
-                          </button>
-                          <button onClick={() => deleteTask(task.id)} title="Delete" style={{ ...iconBtn, color: "#d1d5db" }}>✕</button>
-                        </div>
-                      </div>
-
                       {/* Bar track */}
-                      <div style={{ width: chartW, flexShrink: 0, position: "relative", height: 52 }}>
+                      <div style={{ width: chartW, flexShrink: 0, position: "relative", height: 40, zIndex: 11 }}>
                         {/* subtle month dividers */}
                         {months.slice(1).map((m, i) => (
                           <div key={i} style={{ position: "absolute", left: `${(m.offset / totalDays) * 100}%`, top: 0, bottom: 0, width: 1, background: "#f0f0f0", pointerEvents: "none" }} />
@@ -391,6 +379,28 @@ export default function GanttTool() {
                         {showToday && (
                           <div style={{ position: "absolute", left: `${todayLeftPct}%`, top: 0, bottom: 0, width: 2, background: "#f59e0b", opacity: 0.7, zIndex: 5, pointerEvents: "none" }} />
                         )}
+
+                        {/* Action buttons — just right of the bar */}
+                        <div className="task-actions" style={{
+                          position: "absolute",
+                          left: `calc(${left}% + ${Math.max(width, 0.5)}%)`,
+                          top: "50%",
+                          transform: "translate(6px, -50%)",
+                          display: "flex", gap: 2, alignItems: "center",
+                          opacity: 0, transition: "opacity 0.15s",
+                          zIndex: 6,
+                        }}>
+                          <button onClick={() => setEditingTask({ ...task })} title="Edit" style={iconBtn}>✎</button>
+                          <button onClick={() => toggleStatus(task.id)} title="Toggle status"
+                            style={{ ...iconBtn, background: delayed ? "#fee2e2" : "#d1fae5", color: delayed ? "#991b1b" : "#065f46" }}>
+                            {delayed ? "⚠" : "✓"}
+                          </button>
+                          <button onClick={() => deleteTask(task.id)} title="Delete" style={{ ...iconBtn, color: "#9ca3af" }}>
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                            </svg>
+                          </button>
+                        </div>
 
                         {task.milestone ? (
                           /* Milestone dot */
@@ -433,6 +443,7 @@ export default function GanttTool() {
                     </div>
                   );
                 })}
+                </div>
               </div>
             );
           })}
@@ -440,7 +451,7 @@ export default function GanttTool() {
           {/* Today label */}
           {showToday && (
             <div style={{ display: "flex", marginTop: 4 }}>
-              <div style={{ width: LABEL_W, flexShrink: 0, position: "sticky", left: 0, zIndex: 10, background: "#f9fafb" }} />
+              <div style={{ width: LABEL_W, flexShrink: 0, position: "sticky", left: 0, zIndex: 20, background: "#f9fafb" }} />
               <div style={{ width: chartW, flexShrink: 0, position: "relative", height: 22 }}>
                 <div style={{ position: "absolute", left: `${todayLeftPct}%`, transform: "translateX(-50%)", fontSize: 12, color: "#f59e0b", fontFamily: "'DM Mono',monospace", fontWeight: 600, whiteSpace: "nowrap" }}>
                   ▲ Today
