@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { supabase } from "./supabase";
 
 const COLORS = [
   { name: "Emerald", bar: "#059669", light: "#d1fae5", text: "#065f46", border: "#6ee7b7" },
@@ -69,38 +70,56 @@ export default function GanttTool() {
   const [editingCat,  setEditingCat]  = useState(null);
   const [nextId, setNextId] = useState(100);
   const [loaded, setLoaded] = useState(false);
-  const [saveStatus, setSaveStatus] = useState(null); // "saving" | "saved" | "error"
   const [pxPerDay, setPxPerDay] = useState(8);
+  const skipNextSave = useRef(false);
+  const saveTimer = useRef(null);
 
-  // ── Load from localStorage on mount ─────────────────────────────────────
+  // ── Load from Supabase on mount + subscribe to real-time changes ─────────
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem("gantt-data");
-      if (raw) {
-        const data = JSON.parse(raw);
-        if (data.tasks)      setTasks(data.tasks);
-        if (data.categories) setCategories(data.categories);
-        if (data.viewStart)  setViewStart(data.viewStart);
-        if (data.viewEnd)    setViewEnd(data.viewEnd);
-        if (data.nextId)     setNextId(data.nextId);
+    async function loadData() {
+      const { data, error } = await supabase
+        .from("gantt_data")
+        .select("data")
+        .eq("id", "main")
+        .single();
+      if (!error && data?.data) {
+        applyRemoteData(data.data);
       }
-    } catch (e) {
-      // No saved data yet, use defaults
-    } finally {
       setLoaded(true);
     }
+    loadData();
+
+    const channel = supabase
+      .channel("gantt-sync")
+      .on("postgres_changes", { event: "*", schema: "public", table: "gantt_data" }, (payload) => {
+        if (skipNextSave.current) return;
+        const remote = payload.new?.data;
+        if (remote) applyRemoteData(remote);
+      })
+      .subscribe();
+
+    return () => supabase.removeChannel(channel);
   }, []);
 
-  // ── Save to localStorage on every change ─────────────────────────────────
+  function applyRemoteData(d) {
+    if (d.tasks)      setTasks(d.tasks);
+    if (d.categories) setCategories(d.categories);
+    if (d.viewStart)  setViewStart(d.viewStart);
+    if (d.viewEnd)    setViewEnd(d.viewEnd);
+    if (d.nextId)     setNextId(d.nextId);
+  }
+
+  // ── Debounced save to Supabase on every change ───────────────────────────
   useEffect(() => {
     if (!loaded) return;
-    try {
-      localStorage.setItem("gantt-data", JSON.stringify({ tasks, categories, viewStart, viewEnd, nextId }));
-      setSaveStatus("saved");
-      setTimeout(() => setSaveStatus(null), 2000);
-    } catch (e) {
-      setSaveStatus("error");
-    }
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      skipNextSave.current = true;
+      await supabase
+        .from("gantt_data")
+        .upsert({ id: "main", data: { tasks, categories, viewStart, viewEnd, nextId }, updated_at: new Date().toISOString() });
+      skipNextSave.current = false;
+    }, 800);
   }, [tasks, categories, viewStart, viewEnd, nextId, loaded]);
 
   const [newTask, setNewTask] = useState({
@@ -182,7 +201,7 @@ export default function GanttTool() {
   const todayLeftPct = showToday ? (todayOffset / totalDays) * 100 : null;
 
   const months = getMonths();
-  const LABEL_W = 220; // px — left label column
+  const LABEL_W = 260; // px — left label column
   const chartW  = totalDays * pxPerDay; // px — scrollable chart area
 
   // ── week tick marks ────────────────────────────────────────────────────────
@@ -208,36 +227,29 @@ export default function GanttTool() {
       `}</style>
 
       {/* ── Top bar ──────────────────────────────────────────────────────── */}
-      <div style={{ background: "#fff", borderBottom: "1px solid #e5e7eb", padding: "14px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+      <div style={{ background: "#fff", borderBottom: "1px solid #e5e7eb", padding: "16px 28px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
         <div>
-          <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: "#9ca3af", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 2 }}>Project</div>
-          <h1 style={{ fontSize: 18, fontWeight: 700, color: "#111827", margin: 0 }}>Project Timeline</h1>
+          <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 12, color: "#9ca3af", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 2 }}>Project</div>
+          <h1 style={{ fontSize: 21, fontWeight: 700, color: "#111827", margin: 0 }}>Project Timeline</h1>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 8, padding: "6px 10px" }}>
-            <span style={{ fontSize: 11, color: "#6b7280", fontFamily: "'DM Mono',monospace" }}>View:</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 8, padding: "7px 12px" }}>
+            <span style={{ fontSize: 12, color: "#6b7280", fontFamily: "'DM Mono',monospace" }}>View:</span>
             <input type="date" value={viewStart} onChange={e => setViewStart(e.target.value)}
-              style={{ border: "none", background: "transparent", fontSize: 12, color: "#374151", fontFamily: "'DM Mono',monospace" }} />
-            <span style={{ fontSize: 11, color: "#9ca3af" }}>→</span>
+              style={{ border: "none", background: "transparent", fontSize: 13, color: "#374151", fontFamily: "'DM Mono',monospace" }} />
+            <span style={{ fontSize: 12, color: "#9ca3af" }}>→</span>
             <input type="date" value={viewEnd} onChange={e => setViewEnd(e.target.value)}
-              style={{ border: "none", background: "transparent", fontSize: 12, color: "#374151", fontFamily: "'DM Mono',monospace" }} />
+              style={{ border: "none", background: "transparent", fontSize: 13, color: "#374151", fontFamily: "'DM Mono',monospace" }} />
           </div>
-          {saveStatus && (
-            <span style={{ fontSize: 11, fontFamily: "'DM Mono',monospace", color: saveStatus === "saved" ? "#059669" : saveStatus === "error" ? "#ef4444" : "#9ca3af", display: "flex", alignItems: "center", gap: 4 }}>
-              {saveStatus === "saving" && "⏳ Saving..."}
-              {saveStatus === "saved"  && "✓ Saved"}
-              {saveStatus === "error"  && "✕ Save failed"}
-            </span>
-          )}
           <Btn ghost onClick={fitView}>Fit</Btn>
           <div style={{ display: "flex", alignItems: "center", gap: 0, border: "1px solid #e5e7eb", borderRadius: 8, overflow: "hidden" }}>
             <button onClick={() => setPxPerDay(p => Math.max(2, Math.round(p / 1.4)))}
               title="Zoom out"
-              style={{ border: "none", borderRight: "1px solid #e5e7eb", background: "#fff", color: "#374151", fontSize: 15, cursor: "pointer", padding: "6px 12px", lineHeight: 1, fontWeight: 600 }}>−</button>
-            <span style={{ fontSize: 11, fontFamily: "'DM Mono',monospace", color: "#6b7280", padding: "0 8px", userSelect: "none" }}>{pxPerDay}px/d</span>
+              style={{ border: "none", borderRight: "1px solid #e5e7eb", background: "#fff", color: "#374151", fontSize: 17, cursor: "pointer", padding: "7px 14px", lineHeight: 1, fontWeight: 600 }}>−</button>
+            <span style={{ fontSize: 12, fontFamily: "'DM Mono',monospace", color: "#6b7280", padding: "0 10px", userSelect: "none" }}>{pxPerDay}px/d</span>
             <button onClick={() => setPxPerDay(p => Math.min(60, Math.round(p * 1.4)))}
               title="Zoom in"
-              style={{ border: "none", borderLeft: "1px solid #e5e7eb", background: "#fff", color: "#374151", fontSize: 15, cursor: "pointer", padding: "6px 12px", lineHeight: 1, fontWeight: 600 }}>+</button>
+              style={{ border: "none", borderLeft: "1px solid #e5e7eb", background: "#fff", color: "#374151", fontSize: 17, cursor: "pointer", padding: "7px 14px", lineHeight: 1, fontWeight: 600 }}>+</button>
           </div>
           <Btn ghost onClick={() => setShowAddCat(true)}>⊕ Category</Btn>
           <Btn primary onClick={() => setShowAddTask(true)}>+ Add Task</Btn>
@@ -245,12 +257,12 @@ export default function GanttTool() {
       </div>
 
       {/* ── Legend bar ───────────────────────────────────────────────────── */}
-      <div style={{ background: "#fff", borderBottom: "1px solid #f3f4f6", padding: "8px 24px", display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+      <div style={{ background: "#fff", borderBottom: "1px solid #f3f4f6", padding: "10px 28px", display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
         {categories.map(cat => {
           const color = COLORS[cat.colorIdx % COLORS.length];
           return (
-            <span key={cat.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, color: "#374151", marginRight: 4 }}>
-              <span style={{ width: 10, height: 10, borderRadius: 2, background: color.bar, flexShrink: 0 }} />
+            <span key={cat.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 13, color: "#374151", marginRight: 4 }}>
+              <span style={{ width: 12, height: 12, borderRadius: 2, background: color.bar, flexShrink: 0 }} />
               {cat.name}
               <button onClick={() => setEditingCat({ ...cat })} style={iconBtn}>✎</button>
               <button onClick={() => deleteCategory(cat.id)} style={{ ...iconBtn, color: "#d1d5db" }}>✕</button>
@@ -259,12 +271,12 @@ export default function GanttTool() {
         })}
         <div style={{ marginLeft: "auto", display: "flex", gap: 14, alignItems: "center" }}>
           {[["#059669","On Track"],["#ef4444","Delayed"]].map(([c,l]) => (
-            <span key={l} style={{ display:"flex",alignItems:"center",gap:5,fontSize:11,color:"#6b7280" }}>
-              <span style={{ width:10,height:10,borderRadius:2,background:c }} />{l}
+            <span key={l} style={{ display:"flex",alignItems:"center",gap:5,fontSize:12,color:"#6b7280" }}>
+              <span style={{ width:12,height:12,borderRadius:2,background:c }} />{l}
             </span>
           ))}
-          <span style={{ display:"flex",alignItems:"center",gap:5,fontSize:11,color:"#6b7280" }}>
-            <span style={{ width:12,height:12,borderRadius:"50%",background:"#fff",border:"2px solid #059669",display:"inline-block" }} />Milestone
+          <span style={{ display:"flex",alignItems:"center",gap:5,fontSize:12,color:"#6b7280" }}>
+            <span style={{ width:14,height:14,borderRadius:"50%",background:"#fff",border:"2px solid #059669",display:"inline-block" }} />Milestone
           </span>
         </div>
       </div>
@@ -283,8 +295,8 @@ export default function GanttTool() {
                   width: (m.days / totalDays) * chartW,
                   flexShrink: 0,
                   borderLeft: i > 0 ? "2px solid #e5e7eb" : "none",
-                  padding: "4px 8px",
-                  fontSize: 11, fontWeight: 700, color: "#374151",
+                  padding: "5px 10px",
+                  fontSize: 12, fontWeight: 700, color: "#374151",
                   background: "#f3f4f6",
                   fontFamily: "'DM Mono',monospace",
                   textTransform: "uppercase", letterSpacing: "0.06em",
@@ -297,13 +309,13 @@ export default function GanttTool() {
           </div>
 
           {/* Week ticks */}
-          <div style={{ display: "flex", marginBottom: 12, borderBottom: "2px solid #e5e7eb" }}>
+          <div style={{ display: "flex", marginBottom: 14, borderBottom: "2px solid #e5e7eb" }}>
             <div style={{ width: LABEL_W, flexShrink: 0, position: "sticky", left: 0, zIndex: 10, background: "#f9fafb" }} />
-            <div style={{ width: chartW, flexShrink: 0, position: "relative", height: 22 }}>
+            <div style={{ width: chartW, flexShrink: 0, position: "relative", height: 26 }}>
               {getWeekTicks().map((t, i) => (
                 <div key={i} style={{
                   position: "absolute", left: `${t.pct}%`,
-                  fontSize: 9, color: "#9ca3af", fontFamily: "'DM Mono',monospace",
+                  fontSize: 11, color: "#9ca3af", fontFamily: "'DM Mono',monospace",
                   whiteSpace: "nowrap", transform: "translateX(-2px)",
                   bottom: 3,
                 }}>
@@ -319,21 +331,21 @@ export default function GanttTool() {
             const catTasks = tasks.filter(t => t.categoryId === cat.id);
 
             return (
-              <div key={cat.id} style={{ marginBottom: 6 }}>
+              <div key={cat.id} style={{ marginBottom: 8 }}>
                 {/* Category row */}
                 <div style={{ display: "flex", alignItems: "center", marginBottom: 4 }}>
                   <div style={{ width: LABEL_W, flexShrink: 0, display: "flex", alignItems: "center", gap: 6, position: "sticky", left: 0, zIndex: 10, background: "#f9fafb" }}>
-                    <div style={{ width: 3, height: 14, borderRadius: 2, background: color.bar, flexShrink: 0 }} />
-                    <span style={{ fontSize: 10, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.1em" }}>{cat.name}</span>
+                    <div style={{ width: 4, height: 16, borderRadius: 2, background: color.bar, flexShrink: 0 }} />
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.1em" }}>{cat.name}</span>
                   </div>
                   <div style={{ width: chartW, flexShrink: 0, height: 1, background: "#f0f0f0" }} />
                 </div>
 
                 {catTasks.length === 0 && (
-                  <div style={{ display: "flex", height: 36 }}>
+                  <div style={{ display: "flex", height: 44 }}>
                     <div style={{ width: LABEL_W, flexShrink: 0, position: "sticky", left: 0, zIndex: 10, background: "#f9fafb" }} />
                     <div style={{ width: chartW, flexShrink: 0, display: "flex", alignItems: "center", paddingLeft: 8 }}>
-                      <span style={{ fontSize: 11, color: "#d1d5db", fontStyle: "italic" }}>No tasks — click + Add Task</span>
+                      <span style={{ fontSize: 13, color: "#d1d5db", fontStyle: "italic" }}>No tasks — click + Add Task</span>
                     </div>
                   </div>
                 )}
@@ -346,15 +358,15 @@ export default function GanttTool() {
                   const barText   = delayed ? "#991b1b" : color.text;
 
                   return (
-                    <div key={task.id} style={{ display: "flex", alignItems: "center", marginBottom: 5, minHeight: 44 }}
+                    <div key={task.id} style={{ display: "flex", alignItems: "center", marginBottom: 6, minHeight: 52 }}
                       onMouseEnter={e => e.currentTarget.querySelector(".task-actions").style.opacity = "1"}
                       onMouseLeave={e => e.currentTarget.querySelector(".task-actions").style.opacity = "0"}>
 
                       {/* Left label */}
                       <div style={{ width: LABEL_W, flexShrink: 0, paddingRight: 10, display: "flex", alignItems: "center", gap: 4, position: "sticky", left: 0, zIndex: 10, background: "#f9fafb" }}>
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 12, fontWeight: 500, color: "#1f2937", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{task.name}</div>
-                          <div style={{ fontSize: 10, color: "#9ca3af", fontFamily: "'DM Mono',monospace", marginTop: 1 }}>
+                          <div style={{ fontSize: 14, fontWeight: 500, color: "#1f2937", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{task.name}</div>
+                          <div style={{ fontSize: 12, color: "#9ca3af", fontFamily: "'DM Mono',monospace", marginTop: 1 }}>
                             {formatDate(task.start)} — {formatDate(task.end)}
                           </div>
                         </div>
@@ -369,7 +381,7 @@ export default function GanttTool() {
                       </div>
 
                       {/* Bar track */}
-                      <div style={{ width: chartW, flexShrink: 0, position: "relative", height: 44 }}>
+                      <div style={{ width: chartW, flexShrink: 0, position: "relative", height: 52 }}>
                         {/* subtle month dividers */}
                         {months.slice(1).map((m, i) => (
                           <div key={i} style={{ position: "absolute", left: `${(m.offset / totalDays) * 100}%`, top: 0, bottom: 0, width: 1, background: "#f0f0f0", pointerEvents: "none" }} />
@@ -386,7 +398,7 @@ export default function GanttTool() {
                             position: "absolute",
                             left: `${left}%`,
                             top: "50%", transform: "translate(-50%,-50%)",
-                            width: 16, height: 16, borderRadius: "50%",
+                            width: 20, height: 20, borderRadius: "50%",
                             background: delayed ? "#ef4444" : color.bar,
                             border: "2px solid #fff",
                             boxShadow: `0 0 0 2px ${delayed ? "#ef4444" : color.bar}`,
@@ -399,7 +411,7 @@ export default function GanttTool() {
                             left: `${left}%`,
                             width: `${Math.max(width, 0.5)}%`,
                             top: "50%", transform: "translateY(-50%)",
-                            height: 28, borderRadius: 6,
+                            height: 34, borderRadius: 6,
                             background: barBg,
                             border: `1px solid ${barBorder}`,
                             display: "flex", alignItems: "center",
@@ -411,8 +423,8 @@ export default function GanttTool() {
                           }}
                           onMouseEnter={e => e.currentTarget.style.filter = "brightness(0.93)"}
                           onMouseLeave={e => e.currentTarget.style.filter = "none"}>
-                            <div style={{ width: 6, height: 6, borderRadius: "50%", background: delayed ? "#ef4444" : color.bar, flexShrink: 0 }} />
-                            <span style={{ fontSize: 11, fontWeight: 500, color: barText, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            <div style={{ width: 8, height: 8, borderRadius: "50%", background: delayed ? "#ef4444" : color.bar, flexShrink: 0 }} />
+                            <span style={{ fontSize: 13, fontWeight: 500, color: barText, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                               {delayed && "⚠ "}{task.name}
                             </span>
                           </div>
@@ -429,8 +441,8 @@ export default function GanttTool() {
           {showToday && (
             <div style={{ display: "flex", marginTop: 4 }}>
               <div style={{ width: LABEL_W, flexShrink: 0, position: "sticky", left: 0, zIndex: 10, background: "#f9fafb" }} />
-              <div style={{ width: chartW, flexShrink: 0, position: "relative", height: 18 }}>
-                <div style={{ position: "absolute", left: `${todayLeftPct}%`, transform: "translateX(-50%)", fontSize: 10, color: "#f59e0b", fontFamily: "'DM Mono',monospace", fontWeight: 600, whiteSpace: "nowrap" }}>
+              <div style={{ width: chartW, flexShrink: 0, position: "relative", height: 22 }}>
+                <div style={{ position: "absolute", left: `${todayLeftPct}%`, transform: "translateX(-50%)", fontSize: 12, color: "#f59e0b", fontFamily: "'DM Mono',monospace", fontWeight: 600, whiteSpace: "nowrap" }}>
                   ▲ Today
                 </div>
               </div>
@@ -440,7 +452,7 @@ export default function GanttTool() {
       </div>
 
       {/* Contingency note */}
-      <div style={{ margin: "0 24px 24px", padding: "12px 16px", background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, fontSize: 12, color: "#78350f", lineHeight: 1.6 }}>
+      <div style={{ margin: "0 28px 28px", padding: "14px 18px", background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, fontSize: 14, color: "#78350f", lineHeight: 1.6 }}>
         <strong>⚠ Note:</strong> Add any important notes or contingency plans here.
       </div>
 
@@ -509,13 +521,13 @@ export default function GanttTool() {
 function Modal({ title, children, onClose, onSave, saveLabel }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      <div style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 440, boxShadow: "0 24px 60px rgba(0,0,0,0.18)" }}>
-        <div style={{ padding: "18px 22px 14px", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <h2 style={{ fontSize: 15, fontWeight: 700, margin: 0, color: "#111827" }}>{title}</h2>
-          <button onClick={onClose} style={{ border: "none", background: "none", fontSize: 18, cursor: "pointer", color: "#9ca3af", lineHeight: 1 }}>✕</button>
+      <div style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 500, boxShadow: "0 24px 60px rgba(0,0,0,0.18)" }}>
+        <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <h2 style={{ fontSize: 17, fontWeight: 700, margin: 0, color: "#111827" }}>{title}</h2>
+          <button onClick={onClose} style={{ border: "none", background: "none", fontSize: 20, cursor: "pointer", color: "#9ca3af", lineHeight: 1 }}>✕</button>
         </div>
-        <div style={{ padding: "18px 22px", display: "flex", flexDirection: "column", gap: 14 }}>{children}</div>
-        <div style={{ padding: "14px 22px", borderTop: "1px solid #f3f4f6", display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 16 }}>{children}</div>
+        <div style={{ padding: "16px 24px", borderTop: "1px solid #f3f4f6", display: "flex", justifyContent: "flex-end", gap: 8 }}>
           <Btn ghost onClick={onClose}>Cancel</Btn>
           <Btn primary onClick={onSave}>{saveLabel}</Btn>
         </div>
@@ -527,7 +539,7 @@ function Modal({ title, children, onClose, onSave, saveLabel }) {
 function Field({ label, children }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-      {label && <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</label>}
+      {label && <label style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</label>}
       {children}
     </div>
   );
@@ -539,7 +551,7 @@ function StatusToggle({ value, onChange }) {
       <div style={{ display: "flex", gap: 8 }}>
         {[["on-track", "✓ On Track", "#d1fae5", "#065f46", "#6ee7b7"], ["delayed", "⚠ Delayed", "#fee2e2", "#991b1b", "#fca5a5"]].map(([s, label, bg, col, border]) => (
           <button key={s} onClick={() => onChange(s)}
-            style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${value === s ? border : "#e5e7eb"}`, background: value === s ? bg : "#f9fafb", color: value === s ? col : "#6b7280", fontSize: 12, fontWeight: 500, cursor: "pointer", fontFamily: "inherit" }}>
+            style={{ padding: "9px 16px", borderRadius: 8, border: `1px solid ${value === s ? border : "#e5e7eb"}`, background: value === s ? bg : "#f9fafb", color: value === s ? col : "#6b7280", fontSize: 13, fontWeight: 500, cursor: "pointer", fontFamily: "inherit" }}>
             {label}
           </button>
         ))}
@@ -550,7 +562,7 @@ function StatusToggle({ value, onChange }) {
 
 function MilestoneCheck({ value, onChange }) {
   return (
-    <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, color: "#374151" }}>
+    <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 15, color: "#374151" }}>
       <input type="checkbox" checked={value} onChange={e => onChange(e.target.checked)} />
       Mark as Milestone
     </label>
@@ -563,7 +575,7 @@ function ColorPicker({ value, onChange }) {
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         {COLORS.map((c, i) => (
           <button key={i} onClick={() => onChange(i)} title={c.name}
-            style={{ width: 28, height: 28, borderRadius: 6, background: c.bar, border: value === i ? "2px solid #111827" : "2px solid transparent", cursor: "pointer" }} />
+            style={{ width: 32, height: 32, borderRadius: 6, background: c.bar, border: value === i ? "2px solid #111827" : "2px solid transparent", cursor: "pointer" }} />
         ))}
       </div>
     </Field>
@@ -573,7 +585,7 @@ function ColorPicker({ value, onChange }) {
 function Btn({ primary, ghost, children, onClick }) {
   return (
     <button onClick={onClick} style={{
-      padding: "8px 16px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+      padding: "9px 18px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
       border: primary ? "none" : "1px solid #e5e7eb",
       background: primary ? "#059669" : "#fff",
       color: primary ? "#fff" : "#374151",
@@ -584,14 +596,14 @@ function Btn({ primary, ghost, children, onClick }) {
 }
 
 const inputSt = {
-  width: "100%", padding: "9px 11px",
+  width: "100%", padding: "10px 12px",
   border: "1px solid #e5e7eb", borderRadius: 8,
-  fontSize: 13, color: "#111827", background: "#fafafa",
+  fontSize: 14, color: "#111827", background: "#fafafa",
   fontFamily: "inherit",
 };
 
 const iconBtn = {
   border: "none", background: "#f3f4f6", borderRadius: 4,
-  cursor: "pointer", padding: "3px 5px", fontSize: 11, color: "#6b7280",
+  cursor: "pointer", padding: "4px 6px", fontSize: 13, color: "#6b7280",
   lineHeight: 1,
 };
