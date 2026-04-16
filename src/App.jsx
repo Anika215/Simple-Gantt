@@ -69,6 +69,8 @@ export default function GanttTool() {
   const [editingTask, setEditingTask] = useState(null);
   const [editingCat,  setEditingCat]  = useState(null);
   const [nextId, setNextId] = useState(100);
+  const [hiddenCats, setHiddenCats] = useState({});
+  const [note, setNote] = useState("Add any important notes or contingency plans here.");
   const [loaded, setLoaded] = useState(false);
   const [pxPerDay, setPxPerDay] = useState(8);
   const skipNextSave = useRef(false);
@@ -107,6 +109,7 @@ export default function GanttTool() {
     if (d.viewStart)  setViewStart(d.viewStart);
     if (d.viewEnd)    setViewEnd(d.viewEnd);
     if (d.nextId)     setNextId(d.nextId);
+    if (d.note !== undefined) setNote(d.note);
   }
 
   // ── Debounced save to Supabase on every change ───────────────────────────
@@ -117,15 +120,15 @@ export default function GanttTool() {
       skipNextSave.current = true;
       await supabase
         .from("gantt_data")
-        .upsert({ id: "main", data: { tasks, categories, viewStart, viewEnd, nextId }, updated_at: new Date().toISOString() });
+        .upsert({ id: "main", data: { tasks, categories, viewStart, viewEnd, nextId, note }, updated_at: new Date().toISOString() });
       skipNextSave.current = false;
     }, 800);
-  }, [tasks, categories, viewStart, viewEnd, nextId, loaded]);
+  }, [tasks, categories, viewStart, viewEnd, nextId, note, loaded]);
 
   const [newTask, setNewTask] = useState({
     name: "", categoryId: DEFAULT_CATEGORIES[0].id,
     start: todayStr(), end: todayPlusMonthStr(),
-    status: "on-track", milestone: false,
+    status: "on-track", milestone: false, description: "",
   });
   const [newCat, setNewCat] = useState({ name: "", colorIdx: 0 });
 
@@ -177,7 +180,7 @@ export default function GanttTool() {
     if (!newTask.name.trim()) return;
     setTasks(t => [...t, { ...newTask, id: nextId }]);
     setNextId(n => n + 1);
-    setNewTask({ name: "", categoryId: categories[0]?.id || "", start: todayStr(), end: todayPlusMonthStr(), status: "on-track", milestone: false });
+    setNewTask({ name: "", categoryId: categories[0]?.id || "", start: todayStr(), end: todayPlusMonthStr(), status: "on-track", milestone: false, description: "" });
     setShowAddTask(false);
   }
   function addCategory() {
@@ -187,6 +190,7 @@ export default function GanttTool() {
     setNewCat({ name: "", colorIdx: 0 });
     setShowAddCat(false);
   }
+  function toggleCatVisibility(id) { setHiddenCats(h => ({ ...h, [id]: !h[id] })); }
   function deleteTask(id)     { setTasks(t => t.filter(x => x.id !== id)); }
   function deleteCategory(id) { setCategories(c => c.filter(x => x.id !== id)); setTasks(t => t.filter(x => x.categoryId !== id)); }
   function saveEditTask()     { setTasks(t => t.map(x => x.id === editingTask.id ? editingTask : x)); setEditingTask(null); }
@@ -216,11 +220,11 @@ export default function GanttTool() {
   }
 
   return (
-    <div style={{ fontFamily: "'DM Sans',system-ui,sans-serif", background: "#f9fafb", minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+    <div style={{ fontFamily: "'DM Sans',system-ui,sans-serif", background: "#f9fafb", height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
         *, *::before, *::after { box-sizing: border-box; }
-        body, #root { margin: 0; padding: 0; width: 100%; }
+        body, #root { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
         input:focus, select:focus, button:focus { outline: 2px solid #059669; outline-offset: 1px; }
         ::-webkit-scrollbar { height: 5px; width: 5px; }
         ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
@@ -261,9 +265,12 @@ export default function GanttTool() {
         {categories.map(cat => {
           const color = COLORS[cat.colorIdx % COLORS.length];
           return (
-            <span key={cat.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 13, color: "#374151", marginRight: 4 }}>
-              <span style={{ width: 12, height: 12, borderRadius: 2, background: color.bar, flexShrink: 0 }} />
+            <span key={cat.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 13, color: hiddenCats[cat.id] ? "#9ca3af" : "#374151", marginRight: 4 }}>
+              <span style={{ width: 12, height: 12, borderRadius: 2, background: hiddenCats[cat.id] ? "#d1d5db" : color.bar, flexShrink: 0 }} />
               {cat.name}
+              <button onClick={() => toggleCatVisibility(cat.id)} title={hiddenCats[cat.id] ? "Show" : "Hide"} style={{ ...iconBtn, color: hiddenCats[cat.id] ? "#059669" : "#9ca3af" }}>
+                {hiddenCats[cat.id] ? "◉" : "◎"}
+              </button>
               <button onClick={() => setEditingCat({ ...cat })} style={iconBtn}>✎</button>
               <button onClick={() => deleteCategory(cat.id)} style={{ ...iconBtn, color: "#d1d5db" }}>✕</button>
             </span>
@@ -282,13 +289,13 @@ export default function GanttTool() {
       </div>
 
       {/* ── Gantt body ───────────────────────────────────────────────────── */}
-      <div style={{ flex: 1, overflowX: "auto", overflowY: "auto", padding: "12px 24px 20px" }}>
+      <div style={{ flex: 1, overflowX: "auto", overflowY: "auto", padding: "0 24px 20px" }}>
         {/* We use a table-like layout: fixed left column + fixed-pixel right area */}
         <div style={{ display: "flex", flexDirection: "column", width: LABEL_W + chartW }}>
 
           {/* Month header */}
-          <div style={{ display: "flex", marginBottom: 0 }}>
-            <div style={{ width: LABEL_W, flexShrink: 0, position: "sticky", left: 0, zIndex: 20, background: "#f9fafb" }} />
+          <div style={{ display: "flex", marginBottom: 0, position: "sticky", top: 0, zIndex: 30, background: "#f9fafb" }}>
+            <div style={{ width: LABEL_W, flexShrink: 0, position: "sticky", left: 0, zIndex: 31, background: "#f9fafb" }} />
             <div style={{ width: chartW, flexShrink: 0, display: "flex" }}>
               {months.map((m, i) => (
                 <div key={i} style={{
@@ -309,8 +316,8 @@ export default function GanttTool() {
           </div>
 
           {/* Week ticks */}
-          <div style={{ display: "flex", marginBottom: 8, borderBottom: "2px solid #e5e7eb" }}>
-            <div style={{ width: LABEL_W, flexShrink: 0, position: "sticky", left: 0, zIndex: 20, background: "#f9fafb" }} />
+          <div style={{ display: "flex", marginBottom: 8, borderBottom: "2px solid #e5e7eb", position: "sticky", top: 24, zIndex: 30, background: "#f9fafb" }}>
+            <div style={{ width: LABEL_W, flexShrink: 0, position: "sticky", left: 0, zIndex: 31, background: "#f9fafb" }} />
             <div style={{ width: chartW, flexShrink: 0, position: "relative", height: 20 }}>
               {getWeekTicks().map((t, i) => (
                 <div key={i} style={{
@@ -326,9 +333,9 @@ export default function GanttTool() {
           </div>
 
           {/* Categories + tasks */}
-          {categories.map(cat => {
+          {categories.filter(cat => !hiddenCats[cat.id]).map(cat => {
             const color    = COLORS[cat.colorIdx % COLORS.length];
-            const catTasks = tasks.filter(t => t.categoryId === cat.id);
+            const catTasks = tasks.filter(t => t.categoryId === cat.id).sort((a, b) => a.start.localeCompare(b.start));
 
             return (
               <div key={cat.id} style={{ display: "flex", marginBottom: 6 }}>
@@ -460,11 +467,17 @@ export default function GanttTool() {
             </div>
           )}
         </div>
-      </div>
 
-      {/* Contingency note */}
-      <div style={{ margin: "0 28px 28px", padding: "14px 18px", background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, fontSize: 14, color: "#78350f", lineHeight: 1.6 }}>
-        <strong>⚠ Note:</strong> Add any important notes or contingency plans here.
+        {/* Contingency note */}
+        <div style={{ margin: "16px 0 8px", padding: "14px 18px", background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, width: LABEL_W + chartW }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#92400e", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>⚠ Note</div>
+          <textarea
+            value={note}
+            onChange={e => setNote(e.target.value)}
+            rows={3}
+            style={{ width: "100%", border: "none", background: "transparent", resize: "vertical", fontSize: 14, color: "#78350f", lineHeight: 1.6, fontFamily: "inherit", outline: "none", padding: 0 }}
+          />
+        </div>
       </div>
 
       {/* ── Modals ───────────────────────────────────────────────────────── */}
@@ -484,6 +497,9 @@ export default function GanttTool() {
           </div>
           <StatusToggle value={newTask.status} onChange={s => setNewTask(t => ({ ...t, status: s }))} />
           <MilestoneCheck value={newTask.milestone} onChange={v => setNewTask(t => ({ ...t, milestone: v }))} />
+          <Field label="Description">
+            <textarea value={newTask.description} onChange={e => setNewTask(t => ({ ...t, description: e.target.value }))} rows={3} placeholder="Optional notes or details..." style={{ ...inputSt, resize: "vertical" }} />
+          </Field>
         </Modal>
       )}
 
@@ -503,6 +519,9 @@ export default function GanttTool() {
           </div>
           <StatusToggle value={editingTask.status} onChange={s => setEditingTask(t => ({ ...t, status: s }))} />
           <MilestoneCheck value={editingTask.milestone} onChange={v => setEditingTask(t => ({ ...t, milestone: v }))} />
+          <Field label="Description">
+            <textarea value={editingTask.description || ""} onChange={e => setEditingTask(t => ({ ...t, description: e.target.value }))} rows={3} placeholder="Optional notes or details..." style={{ ...inputSt, resize: "vertical" }} />
+          </Field>
         </Modal>
       )}
 
