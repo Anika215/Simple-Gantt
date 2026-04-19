@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { supabase } from "./supabase";
 
 const COLORS = [
@@ -70,6 +70,7 @@ export default function GanttTool() {
   const [editingCat,  setEditingCat]  = useState(null);
   const [nextId, setNextId] = useState(100);
   const [hiddenCats, setHiddenCats] = useState({});
+  const [expandedTasks, setExpandedTasks] = useState({});
   const [note, setNote] = useState("Add any important notes or contingency plans here.");
   const [loaded, setLoaded] = useState(false);
   const [pxPerDay, setPxPerDay] = useState(8);
@@ -191,6 +192,26 @@ export default function GanttTool() {
     setShowAddCat(false);
   }
   function toggleCatVisibility(id) { setHiddenCats(h => ({ ...h, [id]: !h[id] })); }
+  function toggleExpanded(id) { setExpandedTasks(e => ({ ...e, [id]: !e[id] })); }
+  function addSubtask(taskId) {
+    setTasks(t => t.map(x => x.id === taskId ? {
+      ...x,
+      subtasks: [...(x.subtasks || []), { id: Date.now(), name: "New subtask", done: false }]
+    } : x));
+    setExpandedTasks(e => ({ ...e, [taskId]: true }));
+  }
+  function updateSubtask(taskId, subtaskId, patch) {
+    setTasks(t => t.map(x => x.id === taskId ? {
+      ...x,
+      subtasks: x.subtasks.map(s => s.id === subtaskId ? { ...s, ...patch } : s)
+    } : x));
+  }
+  function deleteSubtask(taskId, subtaskId) {
+    setTasks(t => t.map(x => x.id === taskId ? {
+      ...x,
+      subtasks: (x.subtasks || []).filter(s => s.id !== subtaskId)
+    } : x));
+  }
   function deleteTask(id)     { setTasks(t => t.filter(x => x.id !== id)); }
   function deleteCategory(id) { setCategories(c => c.filter(x => x.id !== id)); setTasks(t => t.filter(x => x.categoryId !== id)); }
   function saveEditTask()     { setTasks(t => t.map(x => x.id === editingTask.id ? editingTask : x)); setEditingTask(null); }
@@ -371,7 +392,8 @@ export default function GanttTool() {
                   const barText   = delayed ? "#991b1b" : color.text;
 
                   return (
-                    <div key={task.id} style={{ display: "flex", alignItems: "center", marginBottom: 4, minHeight: 40 }}
+                    <React.Fragment key={task.id}>
+                    <div style={{ display: "flex", alignItems: "center", marginBottom: 4, minHeight: 40 }}
                       onMouseEnter={e => e.currentTarget.querySelector(".task-actions").style.opacity = "1"}
                       onMouseLeave={e => e.currentTarget.querySelector(".task-actions").style.opacity = "0"}>
 
@@ -423,7 +445,7 @@ export default function GanttTool() {
                           }} onClick={() => setEditingTask({ ...task })} />
                         ) : (
                           /* Regular bar */
-                          <div onClick={() => setEditingTask({ ...task })} style={{
+                          <div style={{
                             position: "absolute",
                             left: `${left}%`,
                             width: `${Math.max(width, 0.5)}%`,
@@ -432,22 +454,70 @@ export default function GanttTool() {
                             background: barBg,
                             border: `1px solid ${barBorder}`,
                             display: "flex", alignItems: "center",
-                            padding: "0 8px", gap: 5,
+                            padding: "0 6px 0 8px", gap: 5,
                             zIndex: 3, cursor: "pointer",
                             transition: "filter 0.15s",
                             overflow: "hidden",
                             minWidth: 6,
                           }}
                           onMouseEnter={e => e.currentTarget.style.filter = "brightness(0.93)"}
-                          onMouseLeave={e => e.currentTarget.style.filter = "none"}>
+                          onMouseLeave={e => e.currentTarget.style.filter = "none"}
+                          onClick={() => toggleExpanded(task.id)}>
                             <div style={{ width: 8, height: 8, borderRadius: "50%", background: delayed ? "#ef4444" : color.bar, flexShrink: 0 }} />
-                            <span style={{ fontSize: 13, fontWeight: 500, color: barText, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            <span style={{ fontSize: 13, fontWeight: 500, color: barText, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: 1 }}>
                               {delayed && "⚠ "}{task.name}
                             </span>
+                            {(task.subtasks?.length > 0) && (
+                              <span style={{ fontSize: 10, color: barText, opacity: 0.6, flexShrink: 0 }}>
+                                {expandedTasks[task.id] ? "▲" : "▼"} {task.subtasks.length}
+                              </span>
+                            )}
+                            <button
+                              onClick={e => { e.stopPropagation(); addSubtask(task.id); }}
+                              title="Add subtask"
+                              style={{ border: "none", background: "transparent", color: barText, opacity: 0.6, cursor: "pointer", padding: "0 2px", fontSize: 14, lineHeight: 1, flexShrink: 0 }}>
+                              +
+                            </button>
                           </div>
                         )}
                       </div>
                     </div>
+
+                    {/* Subtask rows */}
+                    {expandedTasks[task.id] && (task.subtasks || []).map(sub => (
+                      <div key={sub.id} style={{ display: "flex", alignItems: "center", marginBottom: 3, minHeight: 30 }}>
+                        <div style={{ width: chartW, flexShrink: 0, position: "relative", height: 30, zIndex: 11 }}>
+                          {months.slice(1).map((m, i) => (
+                            <div key={i} style={{ position: "absolute", left: `${(m.offset / totalDays) * 100}%`, top: 0, bottom: 0, width: 1, background: "#f0f0f0", pointerEvents: "none" }} />
+                          ))}
+                          <div style={{
+                            position: "absolute",
+                            left: `${left}%`,
+                            width: `${Math.max(width, 0.5)}%`,
+                            top: "50%", transform: "translateY(-50%)",
+                            height: 24, borderRadius: 4,
+                            background: sub.done ? "#f3f4f6" : color.light,
+                            border: `1px dashed ${sub.done ? "#d1d5db" : color.border}`,
+                            display: "flex", alignItems: "center",
+                            padding: "0 8px", gap: 6,
+                            overflow: "hidden",
+                          }}>
+                            <input type="checkbox" checked={sub.done} onChange={e => updateSubtask(task.id, sub.id, { done: e.target.checked })}
+                              style={{ flexShrink: 0, cursor: "pointer", accentColor: color.bar }} />
+                            <span
+                              contentEditable
+                              suppressContentEditableWarning
+                              onBlur={e => updateSubtask(task.id, sub.id, { name: e.currentTarget.textContent })}
+                              style={{ fontSize: 12, color: sub.done ? "#9ca3af" : color.text, textDecoration: sub.done ? "line-through" : "none", flex: 1, outline: "none", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: "text" }}>
+                              {sub.name}
+                            </span>
+                            <button onClick={() => deleteSubtask(task.id, sub.id)}
+                              style={{ border: "none", background: "transparent", color: "#d1d5db", cursor: "pointer", padding: 0, fontSize: 11, lineHeight: 1, flexShrink: 0 }}>✕</button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    </React.Fragment>
                   );
                 })}
                 </div>
