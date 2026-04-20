@@ -74,8 +74,9 @@ export default function GanttTool() {
   const [note, setNote] = useState("Add any important notes or contingency plans here.");
   const [loaded, setLoaded] = useState(false);
   const [pxPerDay, setPxPerDay] = useState(8);
-  const isDirty = useRef(false);   // true while we have unsaved local changes
-  const isSaving = useRef(false);  // true while the upsert is in flight
+  const isDirty = useRef(false);
+  const isSaving = useRef(false);
+  const lastSavedAt = useRef(null); // timestamp of the last save we wrote
   const saveTimer = useRef(null);
 
   // ── Load from Supabase on mount + subscribe to real-time changes ─────────
@@ -83,10 +84,11 @@ export default function GanttTool() {
     async function loadData() {
       const { data, error } = await supabase
         .from("gantt_data")
-        .select("data")
+        .select("data, updated_at")
         .eq("id", "main")
         .single();
       if (!error && data?.data) {
+        lastSavedAt.current = data.updated_at;
         applyRemoteData(data.data);
       }
       setLoaded(true);
@@ -96,8 +98,12 @@ export default function GanttTool() {
     const channel = supabase
       .channel("gantt-sync")
       .on("postgres_changes", { event: "*", schema: "public", table: "gantt_data" }, (payload) => {
-        // Skip if we caused this event or have pending local changes not yet saved
-        if (isSaving.current || isDirty.current) return;
+        // Ignore if we have unsaved local changes or a save in flight
+        if (isDirty.current || isSaving.current) return;
+        const remoteTs = payload.new?.updated_at;
+        // Ignore if this event is older than or equal to what we last saved
+        if (lastSavedAt.current && remoteTs <= lastSavedAt.current) return;
+        lastSavedAt.current = remoteTs;
         const remote = payload.new?.data;
         if (remote) applyRemoteData(remote);
       })
@@ -122,9 +128,11 @@ export default function GanttTool() {
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
       isSaving.current = true;
+      const ts = new Date().toISOString();
       await supabase
         .from("gantt_data")
-        .upsert({ id: "main", data: { tasks, categories, viewStart, viewEnd, nextId, note }, updated_at: new Date().toISOString() });
+        .upsert({ id: "main", data: { tasks, categories, viewStart, viewEnd, nextId, note }, updated_at: ts });
+      lastSavedAt.current = ts;
       isSaving.current = false;
       isDirty.current = false;
     }, 800);
