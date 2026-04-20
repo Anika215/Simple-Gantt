@@ -74,7 +74,8 @@ export default function GanttTool() {
   const [note, setNote] = useState("Add any important notes or contingency plans here.");
   const [loaded, setLoaded] = useState(false);
   const [pxPerDay, setPxPerDay] = useState(8);
-  const skipNextSave = useRef(false);
+  const isDirty = useRef(false);   // true while we have unsaved local changes
+  const isSaving = useRef(false);  // true while the upsert is in flight
   const saveTimer = useRef(null);
 
   // ── Load from Supabase on mount + subscribe to real-time changes ─────────
@@ -95,7 +96,8 @@ export default function GanttTool() {
     const channel = supabase
       .channel("gantt-sync")
       .on("postgres_changes", { event: "*", schema: "public", table: "gantt_data" }, (payload) => {
-        if (skipNextSave.current) return;
+        // Skip if we caused this event or have pending local changes not yet saved
+        if (isSaving.current || isDirty.current) return;
         const remote = payload.new?.data;
         if (remote) applyRemoteData(remote);
       })
@@ -116,13 +118,15 @@ export default function GanttTool() {
   // ── Debounced save to Supabase on every change ───────────────────────────
   useEffect(() => {
     if (!loaded) return;
+    isDirty.current = true;
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
-      skipNextSave.current = true;
+      isSaving.current = true;
       await supabase
         .from("gantt_data")
         .upsert({ id: "main", data: { tasks, categories, viewStart, viewEnd, nextId, note }, updated_at: new Date().toISOString() });
-      skipNextSave.current = false;
+      isSaving.current = false;
+      isDirty.current = false;
     }, 800);
   }, [tasks, categories, viewStart, viewEnd, nextId, note, loaded]);
 
@@ -368,7 +372,10 @@ export default function GanttTool() {
                     background: color.light,
                     border: `1px solid ${color.border}`,
                     display: "flex", alignItems: "center", justifyContent: "center",
-                    minHeight: catTasks.length === 0 ? 40 : catTasks.length * 46,
+                    minHeight: catTasks.length === 0 ? 40 : catTasks.reduce((sum, t) => {
+                      const subRows = expandedTasks[t.id] ? (t.subtasks?.length || 0) : 0;
+                      return sum + 44 + subRows * 33;
+                    }, 0),
                   }}>
                     <span style={{ fontSize: 13, fontWeight: 700, color: color.text, textTransform: "uppercase", letterSpacing: "0.08em", textAlign: "center", wordBreak: "break-word", padding: "0 8px" }}>{cat.name}</span>
                   </div>
