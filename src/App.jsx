@@ -74,22 +74,48 @@ export default function GanttTool() {
   const [note, setNote] = useState("Add any important notes or contingency plans here.");
   const [loaded, setLoaded] = useState(false);
   const [pxPerDay, setPxPerDay] = useState(8);
-  const isDirty = useRef(false);
   const isSaving = useRef(false);
-  const lastSavedAt = useRef(null); // timestamp of the last save we wrote
+  const deletedTaskIds = useRef(new Set());
+  const deletedCatIds  = useRef(new Set());
   const saveTimer = useRef(null);
+  // Always-current refs so async callbacks never read stale closure values
+  const tasksRef = useRef(tasks);
+  const categoriesRef = useRef(categories);
+  useEffect(() => { tasksRef.current = tasks; }, [tasks]);
+  useEffect(() => { categoriesRef.current = categories; }, [categories]);
+
+  // Merge remote data into local — never drop IDs we have locally
+  function mergeRemote(remote) {
+    const localTaskIds = new Set(tasksRef.current.map(t => t.id));
+    const extraTasks = (remote.tasks || []).filter(t => !localTaskIds.has(t.id) && !deletedTaskIds.current.has(t.id));
+    if (extraTasks.length) setTasks(prev => [...prev, ...extraTasks]);
+
+    const localCatIds = new Set(categoriesRef.current.map(c => c.id));
+    const extraCats = (remote.categories || []).filter(c => !localCatIds.has(c.id) && !deletedCatIds.current.has(c.id));
+    if (extraCats.length) setCategories(prev => [...prev, ...extraCats]);
+
+    if (remote.viewStart) setViewStart(remote.viewStart);
+    if (remote.viewEnd)   setViewEnd(remote.viewEnd);
+    if (remote.nextId)    setNextId(remote.nextId);
+    if (remote.note !== undefined) setNote(remote.note);
+  }
 
   // ── Load from Supabase on mount + subscribe to real-time changes ─────────
   useEffect(() => {
     async function loadData() {
       const { data, error } = await supabase
         .from("gantt_data")
-        .select("data, updated_at")
+        .select("data")
         .eq("id", "main")
         .single();
       if (!error && data?.data) {
-        lastSavedAt.current = data.updated_at;
-        applyRemoteData(data.data);
+        const d = data.data;
+        if (d.tasks)      setTasks(d.tasks);
+        if (d.categories) setCategories(d.categories);
+        if (d.viewStart)  setViewStart(d.viewStart);
+        if (d.viewEnd)    setViewEnd(d.viewEnd);
+        if (d.nextId)     setNextId(d.nextId);
+        if (d.note !== undefined) setNote(d.note);
       }
       setLoaded(true);
     }
@@ -98,50 +124,61 @@ export default function GanttTool() {
     const channel = supabase
       .channel("gantt-sync")
       .on("postgres_changes", { event: "*", schema: "public", table: "gantt_data" }, (payload) => {
-        // Ignore if we have unsaved local changes or a save in flight
-        if (isDirty.current || isSaving.current) return;
-        const remoteTs = payload.new?.updated_at;
-        // Ignore if this event is older than or equal to what we last saved
-        if (lastSavedAt.current && remoteTs <= lastSavedAt.current) return;
-        lastSavedAt.current = remoteTs;
+        if (isSaving.current) return;
         const remote = payload.new?.data;
-        if (remote) applyRemoteData(remote);
+        if (remote) mergeRemote(remote);
       })
       .subscribe();
 
     return () => supabase.removeChannel(channel);
   }, []);
 
-  function applyRemoteData(d) {
-    if (d.tasks)      setTasks(d.tasks);
-    if (d.categories) setCategories(d.categories);
-    if (d.viewStart)  setViewStart(d.viewStart);
-    if (d.viewEnd)    setViewEnd(d.viewEnd);
-    if (d.nextId)     setNextId(d.nextId);
-    if (d.note !== undefined) setNote(d.note);
-  }
-
   // ── Debounced save to Supabase on every change ───────────────────────────
   useEffect(() => {
     if (!loaded) return;
-    isDirty.current = true;
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
       isSaving.current = true;
       const ts = new Date().toISOString();
-      await supabase
+
+      // Fetch server state and merge before writing — never clobber concurrent additions
+      const { data: serverRow } = await supabase
+        .from("gantt_data").select("data").eq("id", "main").single();
+
+      const currentTasks = tasksRef.current;
+      const currentCats  = categoriesRef.current;
+      let finalTasks = currentTasks;
+      let finalCats  = currentCats;
+
+      if (serverRow?.data) {
+        const serverTaskIds = new Set((serverRow.data.tasks || []).map(t => t.id));
+        const serverCatIds  = new Set((serverRow.data.categories || []).map(c => c.id));
+        // Their tasks/cats that we don't have locally
+        const theirTasks = (serverRow.data.tasks || []).filter(t => !currentTasks.find(x => x.id === t.id) && !deletedTaskIds.current.has(t.id));
+        const theirCats  = (serverRow.data.categories || []).filter(c => !currentCats.find(x => x.id === c.id) && !deletedCatIds.current.has(c.id));
+        if (theirTasks.length) finalTasks = [...currentTasks, ...theirTasks];
+        if (theirCats.length)  finalCats  = [...currentCats,  ...theirCats];
+      }
+
+      const { error: upsertError } = await supabase
         .from("gantt_data")
-        .upsert({ id: "main", data: { tasks, categories, viewStart, viewEnd, nextId, note }, updated_at: ts });
-      lastSavedAt.current = ts;
+        .upsert({ id: "main", data: { tasks: finalTasks, categories: finalCats, viewStart, viewEnd, nextId, note }, updated_at: ts });
+
+      if (upsertError) console.error("[gantt] save failed:", upsertError);
+
+      if (finalTasks !== currentTasks) setTasks(finalTasks);
+      if (finalCats  !== currentCats)  setCategories(finalCats);
+
+      deletedTaskIds.current.clear();
+      deletedCatIds.current.clear();
       isSaving.current = false;
-      isDirty.current = false;
     }, 800);
   }, [tasks, categories, viewStart, viewEnd, nextId, note, loaded]);
 
   const [newTask, setNewTask] = useState({
     name: "", categoryId: DEFAULT_CATEGORIES[0].id,
     start: todayStr(), end: todayPlusMonthStr(),
-    status: "on-track", milestone: false, description: "",
+    status: "on-track", milestone: false, milestoneId: "", description: "",
   });
   const [newCat, setNewCat] = useState({ name: "", colorIdx: 0 });
 
@@ -193,7 +230,7 @@ export default function GanttTool() {
     if (!newTask.name.trim()) return;
     setTasks(t => [...t, { ...newTask, id: nextId }]);
     setNextId(n => n + 1);
-    setNewTask({ name: "", categoryId: categories[0]?.id || "", start: todayStr(), end: todayPlusMonthStr(), status: "on-track", milestone: false, description: "" });
+    setNewTask({ name: "", categoryId: categories[0]?.id || "", start: todayStr(), end: todayPlusMonthStr(), status: "on-track", milestone: false, milestoneId: "", description: "" });
     setShowAddTask(false);
   }
   function addCategory() {
@@ -224,9 +261,19 @@ export default function GanttTool() {
       subtasks: (x.subtasks || []).filter(s => s.id !== subtaskId)
     } : x));
   }
-  function deleteTask(id)     { setTasks(t => t.filter(x => x.id !== id)); }
-  function deleteCategory(id) { setCategories(c => c.filter(x => x.id !== id)); setTasks(t => t.filter(x => x.categoryId !== id)); }
-  function saveEditTask()     { setTasks(t => t.map(x => x.id === editingTask.id ? editingTask : x)); setEditingTask(null); }
+  function deleteTask(id) {
+    deletedTaskIds.current.add(id);
+    setTasks(t => t.filter(x => x.id !== id).map(x => String(x.milestoneId) === String(id) ? { ...x, milestoneId: "" } : x));
+  }
+  function deleteCategory(id) { deletedCatIds.current.add(id); setCategories(c => c.filter(x => x.id !== id)); setTasks(t => t.filter(x => x.categoryId !== id)); }
+  function saveEditTask() {
+    setTasks(t => t.map(x => {
+      if (x.id === editingTask.id) return editingTask;
+      if (!editingTask.milestone && String(x.milestoneId) === String(editingTask.id)) return { ...x, milestoneId: "" };
+      return x;
+    }));
+    setEditingTask(null);
+  }
   function saveEditCat()      { setCategories(c => c.map(x => x.id === editingCat.id ? editingCat : x)); setEditingCat(null); }
   function toggleStatus(id)   { setTasks(t => t.map(x => x.id === id ? { ...x, status: x.status === "on-track" ? "delayed" : "on-track" } : x)); }
   function fitView()          { const r = taskRangeView(tasks); setViewStart(r.start); setViewEnd(r.end); }
@@ -267,7 +314,7 @@ export default function GanttTool() {
       <div style={{ background: "#fff", borderBottom: "1px solid #e5e7eb", padding: "10px 28px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
         <div>
           <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 12, color: "#9ca3af", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 2 }}>Project</div>
-          <h1 style={{ fontSize: 21, fontWeight: 700, color: "#111827", margin: 0 }}>Project Timeline</h1>
+          <h1 style={{ fontSize: 21, fontWeight: 700, color: "#111827", margin: 0 }}>Telesto Timeline</h1>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 8, padding: "7px 12px" }}>
@@ -322,7 +369,7 @@ export default function GanttTool() {
       </div>
 
       {/* ── Gantt body ───────────────────────────────────────────────────── */}
-      <div style={{ flex: 1, overflowX: "auto", overflowY: "auto", padding: "0 24px 20px" }}>
+      <div style={{ flex: 1, overflowX: "auto", overflowY: "auto", padding: "0 24px 20px 0" }}>
         {/* We use a table-like layout: fixed left column + fixed-pixel right area */}
         <div style={{ display: "flex", flexDirection: "column", width: LABEL_W + chartW }}>
 
@@ -366,6 +413,19 @@ export default function GanttTool() {
           </div>
 
           {/* Categories + tasks */}
+          <div style={{ position: "relative" }}>
+          {/* Milestone vertical lines — rendered over all swimlanes */}
+          {tasks.filter(t => t.milestone).map(t => {
+            const { left } = barGeometry(t);
+            const color = getCatColor(t.categoryId);
+            return (
+              <div key={`ml-${t.id}`} style={{ position: "absolute", left: LABEL_W + (left / 100) * chartW, top: 0, bottom: 0, width: 2, background: color.bar, opacity: 0.5, zIndex: 15, pointerEvents: "none" }}>
+                <div style={{ position: "absolute", top: 2, left: 6, fontSize: 11, fontWeight: 700, color: color.bar, whiteSpace: "nowrap", fontFamily: "'DM Mono',monospace", letterSpacing: "0.04em" }}>
+                  {t.name}
+                </div>
+              </div>
+            );
+          })}
           {categories.filter(cat => !hiddenCats[cat.id]).map(cat => {
             const color    = COLORS[cat.colorIdx % COLORS.length];
             const catTasks = tasks.filter(t => t.categoryId === cat.id).sort((a, b) => a.start.localeCompare(b.start));
@@ -374,7 +434,7 @@ export default function GanttTool() {
               <div key={cat.id} style={{ display: "flex", marginBottom: 6 }}>
 
                 {/* Tall phase label — spans all task rows */}
-                <div style={{ width: LABEL_W, flexShrink: 0, position: "sticky", left: 0, zIndex: 20, background: "#f9fafb", display: "flex", alignItems: "center", justifyContent: "center", padding: "4px 8px" }}>
+                <div style={{ width: LABEL_W, flexShrink: 0, position: "sticky", left: 0, zIndex: 50, background: "#f9fafb", display: "flex", alignItems: "center", justifyContent: "center", padding: "4px 8px" }}>
                   <div style={{
                     width: "100%", borderRadius: 10,
                     background: color.light,
@@ -413,7 +473,7 @@ export default function GanttTool() {
                       onMouseLeave={e => e.currentTarget.querySelector(".task-actions").style.opacity = "0"}>
 
                       {/* Bar track */}
-                      <div style={{ width: chartW, flexShrink: 0, position: "relative", height: 40, zIndex: 11 }}>
+                      <div style={{ width: chartW, flexShrink: 0, position: "relative", height: 40, zIndex: 11, overflow: "hidden" }}>
                         {/* subtle month dividers */}
                         {months.slice(1).map((m, i) => (
                           <div key={i} style={{ position: "absolute", left: `${(m.offset / totalDays) * 100}%`, top: 0, bottom: 0, width: 1, background: "#f0f0f0", pointerEvents: "none" }} />
@@ -447,17 +507,17 @@ export default function GanttTool() {
                         </div>
 
                         {task.milestone ? (
-                          /* Milestone dot */
-                          <div title={task.name} style={{
+                          /* Milestone diamond on the line */
+                          <div title={task.name} onClick={() => setEditingTask({ ...task })} style={{
                             position: "absolute",
                             left: `${left}%`,
-                            top: "50%", transform: "translate(-50%,-50%)",
-                            width: 20, height: 20, borderRadius: "50%",
+                            top: "50%", transform: "translate(-50%,-50%) rotate(45deg)",
+                            width: 12, height: 12,
                             background: delayed ? "#ef4444" : color.bar,
                             border: "2px solid #fff",
                             boxShadow: `0 0 0 2px ${delayed ? "#ef4444" : color.bar}`,
-                            zIndex: 3, cursor: "pointer",
-                          }} onClick={() => setEditingTask({ ...task })} />
+                            zIndex: 16, cursor: "pointer",
+                          }} />
                         ) : (
                           /* Regular bar */
                           <div style={{
@@ -482,6 +542,13 @@ export default function GanttTool() {
                             <span style={{ fontSize: 13, fontWeight: 500, color: barText, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: 1 }}>
                               {delayed && "⚠ "}{task.name}
                             </span>
+                            {task.milestoneId && (() => {
+                              const ms = tasks.find(t => String(t.id) === String(task.milestoneId));
+                              const msColor = ms ? getCatColor(ms.categoryId) : null;
+                              return ms ? (
+                                <span title={`Milestone: ${ms.name}`} style={{ width: 8, height: 8, display: "inline-block", background: msColor.bar, transform: "rotate(45deg)", flexShrink: 0, opacity: 0.85 }} />
+                              ) : null;
+                            })()}
                             {(task.subtasks?.length > 0) && (
                               <span style={{ fontSize: 10, color: barText, opacity: 0.6, flexShrink: 0 }}>
                                 {expandedTasks[task.id] ? "▲" : "▼"} {task.subtasks.length}
@@ -501,7 +568,7 @@ export default function GanttTool() {
                     {/* Subtask rows */}
                     {expandedTasks[task.id] && (task.subtasks || []).map(sub => (
                       <div key={sub.id} style={{ display: "flex", alignItems: "center", marginBottom: 3, minHeight: 30 }}>
-                        <div style={{ width: chartW, flexShrink: 0, position: "relative", height: 30, zIndex: 11 }}>
+                        <div style={{ width: chartW, flexShrink: 0, position: "relative", height: 30, zIndex: 11, overflow: "hidden" }}>
                           {months.slice(1).map((m, i) => (
                             <div key={i} style={{ position: "absolute", left: `${(m.offset / totalDays) * 100}%`, top: 0, bottom: 0, width: 1, background: "#f0f0f0", pointerEvents: "none" }} />
                           ))}
@@ -540,10 +607,12 @@ export default function GanttTool() {
             );
           })}
 
+          </div>{/* end milestone wrapper */}
+
           {/* Today label */}
           {showToday && (
             <div style={{ display: "flex", marginTop: 4 }}>
-              <div style={{ width: LABEL_W, flexShrink: 0, position: "sticky", left: 0, zIndex: 20, background: "#f9fafb" }} />
+              <div style={{ width: LABEL_W, flexShrink: 0, position: "sticky", left: 0, zIndex: 50, background: "#f9fafb" }} />
               <div style={{ width: chartW, flexShrink: 0, position: "relative", height: 22 }}>
                 <div style={{ position: "absolute", left: `${todayLeftPct}%`, transform: "translateX(-50%)", fontSize: 12, color: "#f59e0b", fontFamily: "'DM Mono',monospace", fontWeight: 600, whiteSpace: "nowrap" }}>
                   ▲ Today
@@ -576,12 +645,18 @@ export default function GanttTool() {
               {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </Field>
+          <MilestoneCheck value={newTask.milestone} onChange={v => setNewTask(t => ({ ...t, milestone: v, end: v ? t.start : t.end }))} />
+          <Field label="Associated Milestone">
+            <select value={newTask.milestoneId || ""} onChange={e => setNewTask(t => ({ ...t, milestoneId: e.target.value }))} style={inputSt}>
+              <option value="">— None —</option>
+              {tasks.filter(t => t.milestone).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </Field>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Field label="Start Date"><input type="date" value={newTask.start} onChange={e => setNewTask(t => ({ ...t, start: e.target.value }))} style={inputSt} /></Field>
-            <Field label="End Date"><input type="date" value={newTask.end} onChange={e => setNewTask(t => ({ ...t, end: e.target.value }))} style={inputSt} /></Field>
+            <Field label="Start Date"><input type="date" value={newTask.start} onChange={e => setNewTask(t => ({ ...t, start: e.target.value, end: t.milestone ? e.target.value : t.end }))} style={inputSt} /></Field>
+            <Field label="End Date"><input type="date" value={newTask.end} disabled={newTask.milestone} onChange={e => setNewTask(t => ({ ...t, end: e.target.value }))} style={{ ...inputSt, opacity: newTask.milestone ? 0.4 : 1, cursor: newTask.milestone ? "not-allowed" : "auto" }} /></Field>
           </div>
           <StatusToggle value={newTask.status} onChange={s => setNewTask(t => ({ ...t, status: s }))} />
-          <MilestoneCheck value={newTask.milestone} onChange={v => setNewTask(t => ({ ...t, milestone: v }))} />
           <Field label="Description">
             <textarea value={newTask.description} onChange={e => setNewTask(t => ({ ...t, description: e.target.value }))} rows={3} placeholder="Optional notes or details..." style={{ ...inputSt, resize: "vertical" }} />
           </Field>
@@ -598,12 +673,18 @@ export default function GanttTool() {
               {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </Field>
+          <MilestoneCheck value={editingTask.milestone} onChange={v => setEditingTask(t => ({ ...t, milestone: v, end: v ? t.start : t.end }))} />
+          <Field label="Associated Milestone">
+            <select value={editingTask.milestoneId || ""} onChange={e => setEditingTask(t => ({ ...t, milestoneId: e.target.value }))} style={inputSt}>
+              <option value="">— None —</option>
+              {tasks.filter(t => t.milestone && t.id !== editingTask.id).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </Field>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Field label="Start Date"><input type="date" value={editingTask.start} onChange={e => setEditingTask(t => ({ ...t, start: e.target.value }))} style={inputSt} /></Field>
-            <Field label="End Date"><input type="date" value={editingTask.end} onChange={e => setEditingTask(t => ({ ...t, end: e.target.value }))} style={inputSt} /></Field>
+            <Field label="Start Date"><input type="date" value={editingTask.start} onChange={e => setEditingTask(t => ({ ...t, start: e.target.value, end: t.milestone ? e.target.value : t.end }))} style={inputSt} /></Field>
+            <Field label="End Date"><input type="date" value={editingTask.end} disabled={editingTask.milestone} onChange={e => setEditingTask(t => ({ ...t, end: e.target.value }))} style={{ ...inputSt, opacity: editingTask.milestone ? 0.4 : 1, cursor: editingTask.milestone ? "not-allowed" : "auto" }} /></Field>
           </div>
           <StatusToggle value={editingTask.status} onChange={s => setEditingTask(t => ({ ...t, status: s }))} />
-          <MilestoneCheck value={editingTask.milestone} onChange={v => setEditingTask(t => ({ ...t, milestone: v }))} />
           <Field label="Description">
             <textarea value={editingTask.description || ""} onChange={e => setEditingTask(t => ({ ...t, description: e.target.value }))} rows={3} placeholder="Optional notes or details..." style={{ ...inputSt, resize: "vertical" }} />
           </Field>
@@ -636,13 +717,13 @@ export default function GanttTool() {
 function Modal({ title, children, onClose, onSave, saveLabel }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      <div style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 500, boxShadow: "0 24px 60px rgba(0,0,0,0.18)" }}>
-        <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <div style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 500, boxShadow: "0 24px 60px rgba(0,0,0,0.18)", display: "flex", flexDirection: "column", maxHeight: "calc(100vh - 40px)" }}>
+        <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
           <h2 style={{ fontSize: 17, fontWeight: 700, margin: 0, color: "#111827" }}>{title}</h2>
           <button onClick={onClose} style={{ border: "none", background: "none", fontSize: 20, cursor: "pointer", color: "#9ca3af", lineHeight: 1 }}>✕</button>
         </div>
-        <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 16 }}>{children}</div>
-        <div style={{ padding: "16px 24px", borderTop: "1px solid #f3f4f6", display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 16, overflowY: "auto" }}>{children}</div>
+        <div style={{ padding: "16px 24px", borderTop: "1px solid #f3f4f6", display: "flex", justifyContent: "flex-end", gap: 8, flexShrink: 0 }}>
           <Btn ghost onClick={onClose}>Cancel</Btn>
           <Btn primary onClick={onSave}>{saveLabel}</Btn>
         </div>
