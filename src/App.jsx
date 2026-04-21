@@ -72,6 +72,7 @@ export default function GanttTool() {
   const [hiddenCats, setHiddenCats] = useState({});
   const [expandedTasks, setExpandedTasks] = useState({});
   const [note, setNote] = useState("Add any important notes or contingency plans here.");
+  const [filterMilestoneId, setFilterMilestoneId] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [pxPerDay, setPxPerDay] = useState(8);
   const isSaving = useRef(false);
@@ -326,6 +327,13 @@ export default function GanttTool() {
               style={{ border: "none", background: "transparent", fontSize: 13, color: "#374151", fontFamily: "'DM Mono',monospace" }} />
           </div>
           <Btn ghost onClick={fitView}>Fit</Btn>
+          {tasks.some(t => t.milestone) && (
+            <select value={filterMilestoneId} onChange={e => setFilterMilestoneId(e.target.value)}
+              style={{ border: "1px solid #e5e7eb", borderRadius: 8, background: filterMilestoneId ? "#fef3c7" : "#f9fafb", fontSize: 13, color: "#374151", padding: "7px 10px", fontFamily: "inherit", cursor: "pointer" }}>
+              <option value="">All milestones</option>
+              {tasks.filter(t => t.milestone).map(m => <option key={m.id} value={String(m.id)}>{m.name}</option>)}
+            </select>
+          )}
           <div style={{ display: "flex", alignItems: "center", gap: 0, border: "1px solid #e5e7eb", borderRadius: 8, overflow: "hidden" }}>
             <button onClick={() => setPxPerDay(p => Math.max(2, Math.round(p / 1.4)))}
               title="Zoom out"
@@ -428,7 +436,7 @@ export default function GanttTool() {
           })}
           {categories.filter(cat => !hiddenCats[cat.id]).map(cat => {
             const color    = COLORS[cat.colorIdx % COLORS.length];
-            const catTasks = tasks.filter(t => t.categoryId === cat.id).sort((a, b) => a.start.localeCompare(b.start));
+            const catTasks = tasks.filter(t => t.categoryId === cat.id && (!filterMilestoneId || String(t.milestoneId) === filterMilestoneId || (t.milestone && String(t.id) === filterMilestoneId))).sort((a, b) => a.start.localeCompare(b.start));
 
             return (
               <div key={cat.id} style={{ display: "flex", marginBottom: 6 }}>
