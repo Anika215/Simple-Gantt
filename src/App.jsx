@@ -26,6 +26,15 @@ const DEFAULT_TASKS = [
   { id: 7, name: "Task C1",          categoryId: "phase-c", start: "2026-04-15", end: "2026-05-31", status: "on-track", milestone: false },
 ];
 
+function normalizeData(raw) {
+  if (!raw) return null;
+  const tasks = (raw.categories || []).flatMap(cat =>
+    (cat.tasks || []).map(t => ({ ...t, categoryId: cat.id }))
+  );
+  const categories = (raw.categories || []).map(({ tasks: _, ...rest }) => rest);
+  return { ...raw, tasks, categories };
+}
+
 function daysBetween(a, b) {
   return Math.round((new Date(b) - new Date(a)) / 86400000);
 }
@@ -110,7 +119,7 @@ export default function GanttTool() {
         .eq("id", "main")
         .single();
       if (!error && data?.data) {
-        const d = data.data;
+        const d = normalizeData(data.data);
         if (d.tasks)      setTasks(d.tasks);
         if (d.categories) setCategories(d.categories);
         if (d.viewStart)  setViewStart(d.viewStart);
@@ -126,7 +135,7 @@ export default function GanttTool() {
       .channel("gantt-sync")
       .on("postgres_changes", { event: "*", schema: "public", table: "gantt_data" }, (payload) => {
         if (isSaving.current) return;
-        const remote = payload.new?.data;
+        const remote = normalizeData(payload.new?.data);
         if (remote) mergeRemote(remote);
       })
       .subscribe();
@@ -152,18 +161,17 @@ export default function GanttTool() {
       let finalCats  = currentCats;
 
       if (serverRow?.data) {
-        const serverTaskIds = new Set((serverRow.data.tasks || []).map(t => t.id));
-        const serverCatIds  = new Set((serverRow.data.categories || []).map(c => c.id));
+        const serverNorm = normalizeData(serverRow.data);
         // Their tasks/cats that we don't have locally
-        const theirTasks = (serverRow.data.tasks || []).filter(t => !currentTasks.find(x => x.id === t.id) && !deletedTaskIds.current.has(t.id));
-        const theirCats  = (serverRow.data.categories || []).filter(c => !currentCats.find(x => x.id === c.id) && !deletedCatIds.current.has(c.id));
+        const theirTasks = (serverNorm.tasks || []).filter(t => !currentTasks.find(x => x.id === t.id) && !deletedTaskIds.current.has(t.id));
+        const theirCats  = (serverNorm.categories || []).filter(c => !currentCats.find(x => x.id === c.id) && !deletedCatIds.current.has(c.id));
         if (theirTasks.length) finalTasks = [...currentTasks, ...theirTasks];
         if (theirCats.length)  finalCats  = [...currentCats,  ...theirCats];
       }
 
       const { error: upsertError } = await supabase
         .from("gantt_data")
-        .upsert({ id: "main", data: { tasks: finalTasks, categories: finalCats, viewStart, viewEnd, nextId, note }, updated_at: ts });
+        .upsert({ id: "main", data: { categories: finalCats.map(c => ({ ...c, tasks: finalTasks.filter(t => t.categoryId === c.id) })), viewStart, viewEnd, nextId, note }, updated_at: ts });
 
       if (upsertError) console.error("[gantt] save failed:", upsertError);
 
